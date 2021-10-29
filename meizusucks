@@ -1,0 +1,217 @@
+#
+# MeizuSucks half-automatic build bot
+# Copyright (c) MeizuCustoms, 2021
+#
+# Usage (one target, upload to Google Drive):
+# source meizusucks BUILD_TARGET
+# Or (multiple targets):
+# source meizusucks multitarget TARGET1 TARGET2 ... TARGET17 ...
+# Or (upload to SourceForge):
+# source meizusucks bacon release
+#
+
+# Path to JSON config (example config: config.json)
+export MSBUILD_CONFIG="$HOME/mzbot_config.json"
+
+debugLog() {
+    if [ -z "$MSBUILD_DEBUG" ] || [ "$MSBUILD_DEBUG" = true ]; then
+        echo "$1" > $SHELL_OUTPUT
+    fi
+}
+
+getJSONSetting() {
+    value="$(cat $MSBUILD_CONFIG | jq .${1})"
+
+    if [ ! -z "$value" ]; then
+        # eval used because jq 
+        echo $(eval echo ''$value'')
+    else
+        echo "null"
+        debugLog "ERROR: Failed to get $1 JSON setting"
+    fi
+}
+
+prepareScriptFirstData() {
+    CURRENT_SHELL_PID="$$"
+    OLD_SHELL_PID="$(cat $HOME/.msucks_latest_shell_pid 2>/dev/null)"
+
+    if [ $? != 0 ]; then
+        export NEED_FULL_PREPARATION=true
+    else
+        if [ $CURRENT_SHELL_PID != $OLD_SHELL_PID ]; then
+            export NEED_FULL_PREPARATION=true
+        else
+            export NEED_FULL_PREPARATION=false
+        fi
+    fi
+
+    SHELL_OUTPUT="/proc/$CURRENT_SHELL_PID/fd/1"
+
+    export TELEGRAM_TOKEN="$(getJSONSetting token)"
+    export TELEGRAM_CHAT="$(getJSONSetting chat)"
+    export MSBUILD_TYPE="$(getJSONSetting build_type)"
+    export MSBUILD_DIR="$(getJSONSetting sources)"
+    export MSBUILD_DEBUG="$(getJSONSetting debug)"
+
+    # Clean data used for /last_build
+    rm $HOME/.msucks_last_build*
+
+    export SHELL_OUTPUT
+}
+
+prepareInternalData() {
+    DATE="$(date)"
+
+    if [ "$MSBUILD_TARGET" = "bootimage" ]; then
+        TEXT="образа boot"
+        echo "boot.img" > ~/.msucks_last_build_type
+    elif [ "$MSBUILD_TARGET" = "bacon" ]; then
+        TEXT="прошивки"
+        echo "полная прошивка" > ~/.msucks_last_build_type
+    elif [ "$MSBUILD_TARGET" = "multitarget" ]; then
+        TEXT="множества целей (${MSBUILD_MULTI_TARGET[1]}, ${MSBUILD_MULTI_TARGET[2]}...)"
+        echo "множество целей - ${MSBUILD_MULTI_TARGET[1]}, ${MSBUILD_MULTI_TARGET[2]}..." > ~/.msucks_last_build_type
+    else
+        TEXT="$MSBUILD_TARGET"
+        echo "$MSBUILD_TARGET" > ~/.msucks_last_build_type
+    fi
+
+    export TEXT
+    export DATE
+}
+
+doLunch() {
+    if [ "$NEED_FULL_PREPARATION" = "true" ]; then
+        if [ "$MSBUILD_TARGET" != "multitarget" ]; then
+            send msg "Идет подготовка к началу сборки..."
+        else
+            send msg "Идет подготовка к началу сборки (множество целей)..."
+        fi
+
+        export USE_CCACHE=true
+        cd $MSBUILD_DIR && . build/envsetup.sh && lunch lineage_m1721-$MSBUILD_TYPE
+        echo "$CURRENT_SHELL_PID" > $HOME/.msucks_latest_shell_pid
+    fi
+}
+
+buildTarget() {
+    send msg "Была начата *сборка ${TEXT}* в *${DATE}*."
+
+    echo "$(date +%s)" > ~/.msucks_last_build_date
+
+    PREVTIME="$(date +%s --utc)"
+
+    if [ "$MSBUILD_TARGET" != "multitarget" ]; then
+        cd $MSBUILD_DIR && make $MSBUILD_TARGET -j4
+        excode=$?
+    else
+        cd $MSBUILD_DIR && make ${MSBUILD_MULTI_TARGET[@]} -j4
+        excode=$?
+    fi
+
+    if [ "$excode" != "0" ]; then
+        BUILDFAILED=true
+    else
+        BUILDFAILED=false
+    fi
+
+    CURRTIME="$(date +%s --utc)"
+
+    BUILDTIMEDIFF="$(expr $CURRTIME - $PREVTIME)"
+
+    BUILDTIME="$(date --utc --date="@${BUILDTIMEDIFF}" "+%H:%M:%S")"
+
+    if [ "$BUILDFAILED" = "true" ]; then
+        send msg "Сборка *${TEXT}*, начатая в *${DATE}, провалилась*. Время сборки: $BUILDTIME (закончено в *$(date)*)"
+        echo "failed" > ~/.msucks_last_build_status
+        return 1
+    fi
+
+    echo "success" > ~/.msucks_last_build_status
+}
+
+sendBuild() {
+    if [ ! -z "$1" ]; then
+        telegram -M "$(echo -e "$2")"
+        return
+    fi
+
+    telegram -M "Сборка *$TEXT*, начатая в *$DATE* прошла успешно. Время сборки: *$BUILDTIME* (закончено в *$(date)*)"
+
+    if [ "$MSBUILD_TARGET" = "bootimage" ]; then
+        export MSFILE="$MSBUILD_DIR/out/target/product/m1721/boot.img"
+    elif [ "$MSBUILD_TARGET" = "bacon" ]; then
+        export MSFILE="$(ls $MSBUILD_DIR/out/target/product/m1721/lineage_m1721-ota*)"
+    else
+        echo "none" > ~/.msucks_last_build_uri
+        return
+    fi
+
+    UPLDATE="$(date +%d-%m-%y_%H-%M-%S)"
+
+    if [ "$MSBUILD_TARGET" = "bacon" ]; then
+        GOTURI="$(${MSBUILD_UPLOADER} ${MSFILE} lineage_m1721-ota.eng.tdrk_${UPLDATE}.zip rom)"
+    elif [ "$MSBUILD_TARGET" = "bootimage" ]; then
+        GOTURI="$(${MSBUILD_UPLOADER} ${MSFILE} boot_${UPLDATE}.img boot)"
+    else
+        return
+    fi
+
+    if [ "$MSBUILD_UPLOADER" = "sfupload" ]; then
+        UPLTEXT="Sourceforge"
+        UPLTEXT2=" (требуется подожать 5-10 минут на обработку файла)"
+    else
+        UPLTEXT="Google Drive"
+        UPLTEXT2=" (обработка завершена)"
+    fi
+
+    telegram -M "Скачать: [${UPLTEXT}](${GOTURI})${UPLTEXT2}"
+
+    echo "${GOTURI}" > ~/.msucks_last_build_uri
+}
+
+if [ -z "$1" ]; then
+    echo "Usage: source meizusucks 'build target' [multitarget 'target 1' ...]"
+    return
+fi
+
+unset MSBUILD_UPLOADER \
+      MSBUILD_TARGET \
+      MSBUILD_MULTI_TARGET \
+      MSBUILD_TOTAL_TARGETS 
+
+# Prepare initial variables
+prepareScriptFirstData
+
+MSBUILD_UPLOADER="gdupload"
+
+if [ "$1" = "multitarget"  ]; then
+    for ((i=2;$i<=$#;i++)); do
+        MSBUILD_MULTI_TARGET+=("${(P)i}")
+    done
+
+    MSBUILD_TOTAL_TARGETS="$i"
+elif [ "$2" = "release" ]; then
+    MSBUILD_UPLOADER="sfupload"
+fi
+
+export MSBUILD_UPLOADER
+export MSBUILD_TARGET="$1"
+
+debugLog "Doing lunch: ${NEED_FULL_PREPARATION}"
+debugLog "Uploader: ${MSBUILD_UPLOADER}"
+debugLog "Target: ${MSBUILD_TARGET}"
+
+# Execute 'lunch' and other commands if needed
+doLunch
+
+# Prepare data for Dart bot and Telegram messages texts
+prepareInternalData
+
+# Build target
+buildTarget
+
+# Send build to GDrive/SourceForge if it succeed
+if [ $? = 0 ]; then
+sendBuild
+fi

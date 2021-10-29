@@ -1,0 +1,23 @@
+if [ -z "$1" ] || [ -z "$2" ] || [ -z "$3" ]; then
+echo "Usage: sfupload 'input' 'filename on sourceforge' 'upload type'"
+fi
+
+folder1="LOS 18.1"
+folder2='LOS\ 18.1'
+
+case "$3" in
+"boot") folder="boot.img"
+ffolder=$folder
+;;
+"rom") folder="Full\ ROMs"
+ffolder="Full ROMs"
+;;
+esac
+
+cp $1 /tmp/$2
+
+scp /tmp/$2 "tdrkdev@frs.sourceforge.net:/home/frs/project/meizucustoms/m1721/$folder2/$folder"
+
+rm /tmp/$2
+
+echo 'https://sourceforge.net/projects/meizucustoms/files/m1721/'$folder1'/'$ffolder'/'$2'/download'

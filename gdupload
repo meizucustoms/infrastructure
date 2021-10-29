@@ -1,0 +1,48 @@
+if [ -z "$1" ] || [ -z "$2" ] || [ -z "$3" ]; then
+echo "Usage: gdupload 'input' 'reserved for compatibility with sfupload' 'upload type'"
+fi
+
+# Path to JSON config (example config: config.json)
+# Should equal to meizusucks's MSBUILD_CONFIG
+export MSBUILD_CONFIG="$HOME/mzbot_config.json"
+
+debugLog() {
+    if [ -z "$MSBUILD_DEBUG" ] || [ "$MSBUILD_DEBUG" = true ]; then
+        echo "$1" > $SHELL_OUTPUT
+    fi
+}
+
+getJSONSetting() {
+    value="$(cat $MSBUILD_CONFIG | jq .gdrive.${1})"
+
+    if [ ! -z "$value" ]; then
+        # eval used because jq 
+        echo $(eval echo ''$value'')
+    else
+        echo "null"
+        debugLog "ERROR: Failed to get $1 JSON setting"
+    fi
+}
+
+case "$3" in
+"boot") file="$(getJSONSetting boot_filename)"
+id="$(getJSONSetting boot_fid)"
+;;
+"rom") file="$(getJSONSetting rom_filename)"
+id="$(getJSONSetting rom_fid)"
+;;
+*) return
+;;
+esac
+
+uri='https://drive.google.com/file/d/'$id'/view?usp=sharing'
+
+gdrive update --name "$file" --timeout 0 "$id" "$1" >/dev/null 2>/dev/null
+
+sleep 5
+
+oldrevisionid="$(gdrive revision list "$id" | grep False | head -n 1 | sed 's/ .*//g')"
+
+gdrive revision delete "$id" "$oldrevisionid" >/dev/null 2>/dev/null
+
+echo "$uri"

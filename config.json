@@ -1,0 +1,13 @@
+{
+    "token": "TOKEN",
+    "chat": "CHATID",
+    "build_type": "userdebug",
+    "sources": "$HOME/lineageos",
+    "debug": true,
+    "gdrive": {
+        "rom_fid": "FILE_ID",
+        "rom_filename": "lineage_m1721-ota-eng.tdrk.zip",
+        "boot_fid": "FILE_ID",
+        "boot_filename": "boot.img"
+    }
+}
